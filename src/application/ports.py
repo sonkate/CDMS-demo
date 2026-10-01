@@ -4,6 +4,7 @@ Application layer ports (abstract interfaces).
 These define WHAT the application needs — not HOW it's implemented.
 Concrete implementations live in infrastructure/.
 """
+
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -23,13 +24,8 @@ class ChangeRepository(ABC):
     """Abstraction over the change persistence store."""
 
     @abstractmethod
-    async def get_existing_hashes(self, product_id: str) -> set[str]:
-        """Return all known data_hash values for a given product_id."""
-        ...
-
-    @abstractmethod
-    async def save(self, change: InventoryChange) -> None:
-        """Persist a new change. Must be idempotent (ON CONFLICT DO NOTHING)."""
+    async def save(self, change: InventoryChange) -> bool:
+        """Atomically insert a change; return whether a new row was inserted."""
         ...
 
     @abstractmethod

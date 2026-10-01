@@ -27,20 +27,14 @@ class InMemoryUniqueRepository(ChangeRepository):
         self._changes: dict[tuple[str, str], InventoryChange] = {}
         self._lock = asyncio.Lock()
 
-    async def get_existing_hashes(self, product_id: str) -> set[str]:
-        await asyncio.sleep(0)
-        return {
-            data_hash
-            for stored_product_id, data_hash in self._changes
-            if stored_product_id == product_id
-        }
-
-    async def save(self, change: InventoryChange) -> None:
+    async def save(self, change: InventoryChange) -> bool:
         await asyncio.sleep(0)
         async with self._lock:
-            self._changes.setdefault(
-                (change.product_id, change.data_hash), change
-            )
+            key = (change.product_id, change.data_hash)
+            if key in self._changes:
+                return False
+            self._changes[key] = change
+            return True
 
     async def get_recent(self, limit: int = 50) -> list[dict]:
         return []
@@ -83,14 +77,25 @@ async def test_concurrent_syncs_store_only_one_copy_of_each_state() -> None:
     repository = InMemoryUniqueRepository()
     products = make_products(product_count, "concurrent")
 
-    await asyncio.gather(
+    insert_counts = await asyncio.gather(
         *(
             SyncInventory(StaticInventory(products), repository).execute()
             for _ in range(sync_count)
         )
     )
 
+    assert sum(insert_counts) == product_count
     assert repository.stored_change_count == product_count
+
+
+async def test_sync_rejects_products_without_product_id() -> None:
+    sync = SyncInventory(
+        StaticInventory([{"name": "Product without an ID"}]),
+        InMemoryUniqueRepository(),
+    )
+
+    with pytest.raises(ValueError, match="product_id"):
+        await sync.execute()
 
 
 async def test_postgres_concurrent_syncs_respect_unique_constraint() -> None:
@@ -118,7 +123,7 @@ async def test_postgres_concurrent_syncs_respect_unique_constraint() -> None:
         database_ready = True
 
         repository = PostgresChangeRepository(session_factory)
-        await asyncio.gather(
+        insert_counts = await asyncio.gather(
             *(
                 SyncInventory(StaticInventory(products), repository).execute()
                 for _ in range(12)
@@ -132,6 +137,7 @@ async def test_postgres_concurrent_syncs_respect_unique_constraint() -> None:
                 .where(InventoryChangeModel.product_id.like(f"{namespace}-%"))
             )
 
+        assert sum(insert_counts) == len(products)
         assert stored_count == len(products)
     finally:
         try:

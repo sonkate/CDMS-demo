@@ -6,12 +6,12 @@ Orchestrates the full scheduled-query flow:
   2. For each product, compute its hash and check if it's new
   3. Persist new changes
 """
+
 import logging
 from datetime import datetime, timezone
 
 from src.application.ports import ChangeRepository, InventoryPort
 from src.domain.entities.inventory_change import InventoryChange
-from src.domain.services.change_detector import is_new_change
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,9 @@ SOURCE = "scheduled"
 
 
 class SyncInventory:
-    def __init__(self, inventory: InventoryPort, repository: ChangeRepository) -> None:
+    def __init__(
+        self, inventory: InventoryPort, repository: ChangeRepository
+    ) -> None:
         self._inventory = inventory
         self._repository = repository
 
@@ -34,17 +36,23 @@ class SyncInventory:
 
         saved = 0
         for product in products:
-            product_id = product.get("product_id") or product.get("id", "unknown")
+            product_id = product.get("product_id")
+            if not isinstance(product_id, str) or not product_id.strip():
+                raise ValueError(
+                    "Inventory product is missing a valid product_id"
+                )
             change = InventoryChange(
                 product_id=product_id,
                 data=product,
                 source=SOURCE,
                 changed_at=datetime.now(timezone.utc),
             )
-            existing_hashes = await self._repository.get_existing_hashes(product_id)
-            if is_new_change(existing_hashes, change):
-                await self._repository.save(change)
-                logger.info("Saved new change for product_id=%s hash=%s", product_id, change.data_hash[:8])
+            if await self._repository.save(change):
+                logger.info(
+                    "Saved new change for product_id=%s hash=%s",
+                    product_id,
+                    change.data_hash[:8],
+                )
                 saved += 1
 
         logger.info("Sync complete: %d new change(s) saved", saved)

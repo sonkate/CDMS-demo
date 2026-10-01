@@ -3,6 +3,7 @@ PostgreSQL implementation of ChangeRepository.
 
 Uses SQLAlchemy async session. ON CONFLICT DO NOTHING ensures idempotency.
 """
+
 import uuid
 from typing import Any
 
@@ -16,30 +17,29 @@ from src.infrastructure.database.models import InventoryChangeModel
 
 
 class PostgresChangeRepository(ChangeRepository):
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
         self._session_factory = session_factory
 
-    async def get_existing_hashes(self, product_id: str) -> set[str]:
+    async def save(self, change: InventoryChange) -> bool:
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(InventoryChangeModel.data_hash).where(
-                    InventoryChangeModel.product_id == product_id
+            stmt = (
+                pg_insert(InventoryChangeModel)
+                .values(
+                    id=str(uuid.uuid4()),
+                    product_id=change.product_id,
+                    data_hash=change.data_hash,
+                    data=change.data,
+                    source=change.source,
+                    changed_at=change.changed_at,
                 )
+                .on_conflict_do_nothing(constraint="uq_product_data_hash")
+                .returning(InventoryChangeModel.id)
             )
-            return {row[0] for row in result.all()}
-
-    async def save(self, change: InventoryChange) -> None:
-        async with self._session_factory() as session:
-            stmt = pg_insert(InventoryChangeModel).values(
-                id=str(uuid.uuid4()),
-                product_id=change.product_id,
-                data_hash=change.data_hash,
-                data=change.data,
-                source=change.source,
-                changed_at=change.changed_at,
-            ).on_conflict_do_nothing(constraint="uq_product_data_hash")
-            await session.execute(stmt)
+            inserted_id = await session.scalar(stmt)
             await session.commit()
+            return inserted_id is not None
 
     async def get_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self._session_factory() as session:
